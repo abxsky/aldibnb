@@ -1,0 +1,26 @@
+version: '3'
+services:
+  wp:
+    build: ./wp
+    ports:
+      - "8080:80"
+    restart: always
+    volumes:
+      - ./html:/var/www/html
+
+  db:
+    build: 
+      context: ./db
+    environment:
+      - MYSQL_DATABASE=aldibnb
+      - MYSQL_USER=admin
+      - MYSQL_PASSWORD=admin
+      - MYSQL_ROOT_PASSWORD=admin
+    ports:
+      - "3306:3306"
+
+  phpmyadmin:
+    image: phpmyadmin
+    restart: always
+    ports:
+      - 8899:80
