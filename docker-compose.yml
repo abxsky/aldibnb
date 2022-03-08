@@ -22,7 +22,7 @@ services:
       - "3306:3306"
 
   phpmyadmin:
-    container_name: adibnb-phpmyadmin
+    container_name: aldibnb-phpmyadmin
     image: phpmyadmin
     restart: always
     ports:
