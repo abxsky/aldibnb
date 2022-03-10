@@ -3554,6 +3554,9 @@ function wp_get_recent_posts( $args = array(), $output = ARRAY_A ) {
 function wp_insert_post( $postarr, $wp_error = false ) {
 	global $wpdb;
 
+	// Capture original pre-sanitized array for passing into filters.
+	$unsanitized_postarr = $postarr;
+
 	$user_id = get_current_user_id();
 
 	$defaults = array(
@@ -3747,13 +3750,14 @@ function wp_insert_post( $postarr, $wp_error = false ) {
 	}
 
 	if ( 'attachment' !== $post_type ) {
+		$now = gmdate( 'Y-m-d H:i:s' );
+
 		if ( 'publish' === $post_status ) {
-			// String comparison to work around far future dates (year 2038+) on 32-bit systems.
-			if ( $post_date_gmt > gmdate( 'Y-m-d H:i:59' ) ) {
+			if ( strtotime( $post_date_gmt ) - strtotime( $now ) >= MINUTE_IN_SECONDS ) {
 				$post_status = 'future';
 			}
 		} elseif ( 'future' === $post_status ) {
-			if ( $post_date_gmt <= gmdate( 'Y-m-d H:i:59' ) ) {
+			if ( strtotime( $post_date_gmt ) - strtotime( $now ) < MINUTE_IN_SECONDS ) {
 				$post_status = 'publish';
 			}
 		}
@@ -3864,21 +3868,27 @@ function wp_insert_post( $postarr, $wp_error = false ) {
 		 * Filters attachment post data before it is updated in or added to the database.
 		 *
 		 * @since 3.9.0
+		 * @since 5.4.1 `$unsanitized_postarr` argument added.
 		 *
-		 * @param array $data    An array of sanitized attachment post data.
-		 * @param array $postarr An array of unsanitized attachment post data.
+		 * @param array $data                An array of slashed, sanitized, and processed attachment post data.
+		 * @param array $postarr             An array of slashed and sanitized attachment post data, but not processed.
+		 * @param array $unsanitized_postarr An array of slashed yet *unsanitized* and unprocessed attachment post data
+		 *                                   as originally passed to wp_insert_post().
 		 */
-		$data = apply_filters( 'wp_insert_attachment_data', $data, $postarr );
+		$data = apply_filters( 'wp_insert_attachment_data', $data, $postarr, $unsanitized_postarr );
 	} else {
 		/**
 		 * Filters slashed post data just before it is inserted into the database.
 		 *
 		 * @since 2.7.0
+		 * @since 5.4.1 `$unsanitized_postarr` argument added.
 		 *
-		 * @param array $data    An array of slashed post data.
-		 * @param array $postarr An array of sanitized, but otherwise unmodified post data.
+		 * @param array $data                An array of slashed, sanitized, and processed post data.
+		 * @param array $postarr             An array of sanitized (and slashed) but otherwise unmodified post data.
+		 * @param array $unsanitized_postarr An array of slashed yet *unsanitized* and unprocessed post data as
+		 *                                   originally passed to wp_insert_post().
 		 */
-		$data = apply_filters( 'wp_insert_post_data', $data, $postarr );
+		$data = apply_filters( 'wp_insert_post_data', $data, $postarr, $unsanitized_postarr );
 	}
 	$data  = wp_unslash( $data );
 	$where = array( 'ID' => $post_ID );
@@ -4461,7 +4471,7 @@ function _truncate_post_slug( $slug, $length = 200 ) {
 		if ( $decoded_slug === $slug ) {
 			$slug = substr( $slug, 0, $length );
 		} else {
-			$slug = utf8_uri_encode( $decoded_slug, $length );
+			$slug = utf8_uri_encode( $decoded_slug, $length, true );
 		}
 	}
 
@@ -6385,7 +6395,7 @@ function get_posts_by_author_sql( $post_type, $full = true, $post_author = null,
  *                          'gmt' uses the `post_date_gmt` field.
  *                          Default 'server'.
  * @param string $post_type Optional. The post type to check. Default 'any'.
- * @return string The date of the last post.
+ * @return string The date of the last post, or false on failure.
  */
 function get_lastpostdate( $timezone = 'server', $post_type = 'any' ) {
 	/**
@@ -6393,9 +6403,9 @@ function get_lastpostdate( $timezone = 'server', $post_type = 'any' ) {
 	 *
 	 * @since 2.3.0
 	 *
-	 * @param string $date     Date the last post was published.
-	 * @param string $timezone Location to use for getting the post published date.
-	 *                         See get_lastpostdate() for accepted `$timezone` values.
+	 * @param string|false $date     Date the last post was published. False on failure.
+	 * @param string       $timezone Location to use for getting the post published date.
+	 *                               See get_lastpostdate() for accepted `$timezone` values.
 	 */
 	return apply_filters( 'get_lastpostdate', _get_last_post_time( $timezone, 'date', $post_type ), $timezone );
 }
@@ -6414,7 +6424,7 @@ function get_lastpostdate( $timezone = 'server', $post_type = 'any' ) {
  *                          for information on accepted values.
  *                          Default 'server'.
  * @param string $post_type Optional. The post type to check. Default 'any'.
- * @return string The timestamp in 'Y-m-d H:i:s' format.
+ * @return string The timestamp in 'Y-m-d H:i:s' format, or false on failure.
  */
 function get_lastpostmodified( $timezone = 'server', $post_type = 'any' ) {
 	/**
@@ -6445,9 +6455,10 @@ function get_lastpostmodified( $timezone = 'server', $post_type = 'any' ) {
 	 *
 	 * @since 2.3.0
 	 *
-	 * @param string $lastpostmodified The most recent time that a post was modified, in 'Y-m-d H:i:s' format.
-	 * @param string $timezone         Location to use for getting the post modified date.
-	 *                                 See get_lastpostdate() for accepted `$timezone` values.
+	 * @param string|false $lastpostmodified The most recent time that a post was modified, in 'Y-m-d H:i:s' format.
+	 *                                       False on failure.
+	 * @param string       $timezone         Location to use for getting the post modified date.
+	 *                                       See get_lastpostdate() for accepted `$timezone` values.
 	 */
 	return apply_filters( 'get_lastpostmodified', $lastpostmodified, $timezone );
 }
@@ -6465,7 +6476,7 @@ function get_lastpostmodified( $timezone = 'server', $post_type = 'any' ) {
  *                          for information on accepted values.
  * @param string $field     Post field to check. Accepts 'date' or 'modified'.
  * @param string $post_type Optional. The post type to check. Default 'any'.
- * @return string|false The timestamp in 'Y-m-d H:i:s' format, or false on error.
+ * @return string|false The timestamp in 'Y-m-d H:i:s' format, or false on failure.
  */
 function _get_last_post_time( $timezone, $field, $post_type = 'any' ) {
 	global $wpdb;

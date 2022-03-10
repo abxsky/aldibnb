@@ -94,7 +94,7 @@ function wp_default_packages_vendor( &$scripts ) {
 		'react'                       => '16.9.0',
 		'react-dom'                   => '16.9.0',
 		'moment'                      => '2.22.2',
-		'lodash'                      => '4.17.15',
+		'lodash'                      => '4.17.21',
 		'wp-polyfill-fetch'           => '3.0.0',
 		'wp-polyfill-formdata'        => '3.0.12',
 		'wp-polyfill-node-contains'   => '3.26.0-0',
@@ -225,43 +225,43 @@ function wp_default_packages_scripts( &$scripts ) {
 
 	$packages_versions = array(
 		'a11y'                               => '2.5.1',
-		'annotations'                        => '1.7.2',
+		'annotations'                        => '1.7.4',
 		'api-fetch'                          => '3.6.4',
 		'autop'                              => '2.5.1',
 		'blob'                               => '2.5.1',
-		'block-editor'                       => '3.2.4',
-		'block-library'                      => '2.9.5',
+		'block-editor'                       => '3.2.7',
+		'block-library'                      => '2.9.12',
 		'block-serialization-default-parser' => '3.4.1',
-		'blocks'                             => '6.7.2',
-		'components'                         => '8.3.2',
+		'blocks'                             => '6.7.3',
+		'components'                         => '8.3.4',
 		'compose'                            => '3.7.2',
-		'core-data'                          => '2.7.4',
+		'core-data'                          => '2.7.5',
 		'data-controls'                      => '1.3.4',
 		'data'                               => '4.9.2',
 		'date'                               => '3.5.0',
 		'deprecated'                         => '2.6.1',
 		'dom-ready'                          => '2.5.1',
-		'dom'                                => '2.5.2',
-		'edit-post'                          => '3.8.5',
-		'editor'                             => '9.7.5',
+		'dom'                                => '2.5.3',
+		'edit-post'                          => '3.8.12',
+		'editor'                             => '9.7.9',
 		'element'                            => '2.8.2',
 		'escape-html'                        => '1.5.1',
-		'format-library'                     => '1.9.4',
+		'format-library'                     => '1.9.7',
 		'hooks'                              => '2.6.0',
 		'html-entities'                      => '2.5.0',
 		'i18n'                               => '3.6.1',
 		'is-shallow-equal'                   => '1.6.1',
 		'keycodes'                           => '2.6.2',
-		'list-reusable-blocks'               => '1.8.4',
+		'list-reusable-blocks'               => '1.8.6',
 		'media-utils'                        => '1.2.4',
 		'notices'                            => '1.8.2',
-		'nux'                                => '3.7.2',
+		'nux'                                => '3.7.4',
 		'plugins'                            => '2.7.2',
 		'priority-queue'                     => '1.3.1',
 		'redux-routine'                      => '3.6.2',
-		'rich-text'                          => '3.7.2',
+		'rich-text'                          => '3.7.4',
 		'shortcode'                          => '2.4.1',
-		'server-side-render'                 => '1.3.4',
+		'server-side-render'                 => '1.3.6',
 		'token-list'                         => '1.6.1',
 		'url'                                => '2.8.2',
 		'viewport'                           => '2.8.2',
@@ -1490,7 +1490,7 @@ function wp_default_scripts( &$scripts ) {
 
 	$scripts->add( 'user-suggest', "/wp-admin/js/user-suggest$suffix.js", array( 'jquery-ui-autocomplete' ), false, 1 );
 
-	$scripts->add( 'admin-bar', "/wp-includes/js/admin-bar$suffix.js", array(), false, 1 );
+	$scripts->add( 'admin-bar', "/wp-includes/js/admin-bar$suffix.js", array( 'hoverintent-js' ), false, 1 );
 
 	$scripts->add( 'wplink', "/wp-includes/js/wplink$suffix.js", array( 'jquery', 'wp-a11y' ), false, 1 );
 	did_action( 'init' ) && $scripts->localize(
@@ -1514,6 +1514,9 @@ function wp_default_scripts( &$scripts ) {
 	$scripts->add( 'media-upload', "/wp-admin/js/media-upload$suffix.js", array( 'thickbox', 'shortcode' ), false, 1 );
 
 	$scripts->add( 'hoverIntent', "/wp-includes/js/hoverIntent$suffix.js", array( 'jquery' ), '1.8.1', 1 );
+
+	// JS-only version of hoverintent (no dependencies).
+	$scripts->add( 'hoverintent-js', '/wp-includes/js/hoverintent-js.min.js', array(), '2.2.1', 1 );
 
 	$scripts->add( 'customize-base', "/wp-includes/js/customize-base$suffix.js", array( 'jquery', 'json2', 'underscore' ), false, 1 );
 	$scripts->add( 'customize-loader', "/wp-includes/js/customize-loader$suffix.js", array( 'customize-base' ), false, 1 );
@@ -1618,6 +1621,7 @@ function wp_default_scripts( &$scripts ) {
 	// To enqueue media-views or media-editor, call wp_enqueue_media().
 	// Both rely on numerous settings, styles, and templates to operate correctly.
 	$scripts->add( 'media-views', "/wp-includes/js/media-views$suffix.js", array( 'utils', 'media-models', 'wp-plupload', 'jquery-ui-sortable', 'wp-mediaelement', 'wp-api-request', 'wp-a11y', 'wp-i18n' ), false, 1 );
+	$scripts->set_translations( 'media-views' );
 	$scripts->add( 'media-editor', "/wp-includes/js/media-editor$suffix.js", array( 'shortcode', 'media-views' ), false, 1 );
 	$scripts->add( 'media-audiovideo', "/wp-includes/js/media-audiovideo$suffix.js", array( 'media-editor' ), false, 1 );
 	$scripts->add( 'mce-view', "/wp-includes/js/mce-view$suffix.js", array( 'shortcode', 'jquery', 'media-views', 'media-audiovideo' ), false, 1 );

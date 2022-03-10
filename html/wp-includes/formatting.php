@@ -1155,12 +1155,14 @@ function wp_check_invalid_utf8( $string, $strip = false ) {
  * Encode the Unicode values to be used in the URI.
  *
  * @since 1.5.0
+ * @since 5.8.3 Added the `encode_ascii_characters` parameter.
  *
- * @param string $utf8_string
- * @param int    $length Max  length of the string
+ * @param string $utf8_string             String to encode.
+ * @param int    $length                  Max length of the string
+ * @param bool   $encode_ascii_characters Whether to encode ascii characters such as < " '
  * @return string String with Unicode encoded for URI.
  */
-function utf8_uri_encode( $utf8_string, $length = 0 ) {
+function utf8_uri_encode( $utf8_string, $length = 0, $encode_ascii_characters = false ) {
 	$unicode        = '';
 	$values         = array();
 	$num_octets     = 1;
@@ -1175,11 +1177,14 @@ function utf8_uri_encode( $utf8_string, $length = 0 ) {
 		$value = ord( $utf8_string[ $i ] );
 
 		if ( $value < 128 ) {
-			if ( $length && ( $unicode_length >= $length ) ) {
+			$char                = chr( $value );
+			$encoded_char        = $encode_ascii_characters ? rawurlencode( $char ) : $char;
+			$encoded_char_length = strlen( $encoded_char );
+			if ( $length && ( $unicode_length + $encoded_char_length ) > $length ) {
 				break;
 			}
-			$unicode .= chr( $value );
-			$unicode_length++;
+			$unicode        .= $encoded_char;
+			$unicode_length += $encoded_char_length;
 		} else {
 			if ( count( $values ) == 0 ) {
 				if ( $value < 224 ) {
@@ -2003,6 +2008,24 @@ function remove_accents( $string ) {
 function sanitize_file_name( $filename ) {
 	$filename_raw  = $filename;
 	$special_chars = array( '?', '[', ']', '/', '\\', '=', '<', '>', ':', ';', ',', "'", '"', '&', '$', '#', '*', '(', ')', '|', '~', '`', '!', '{', '}', '%', '+', chr( 0 ) );
+
+	// Check for support for utf8 in the installed PCRE library once and store the result in a static.
+	static $utf8_pcre = null;
+	if ( ! isset( $utf8_pcre ) ) {
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		$utf8_pcre = @preg_match( '/^./u', 'a' );
+	}
+
+	if ( ! seems_utf8( $filename ) ) {
+		$_ext     = pathinfo( $filename, PATHINFO_EXTENSION );
+		$_name    = pathinfo( $filename, PATHINFO_FILENAME );
+		$filename = sanitize_title_with_dashes( $_name ) . '.' . $_ext;
+	}
+
+	if ( $utf8_pcre ) {
+		$filename = preg_replace( "#\x{00a0}#siu", ' ', $filename );
+	}
+
 	/**
 	 * Filters the list of characters to remove from a filename.
 	 *
@@ -2012,7 +2035,6 @@ function sanitize_file_name( $filename ) {
 	 * @param string $filename_raw  Filename as it was passed into sanitize_file_name().
 	 */
 	$special_chars = apply_filters( 'sanitize_file_name_chars', $special_chars, $filename_raw );
-	$filename      = preg_replace( "#\x{00a0}#siu", ' ', $filename );
 	$filename      = str_replace( $special_chars, '', $filename );
 	$filename      = str_replace( array( '%20', '+' ), '-', $filename );
 	$filename      = preg_replace( '/[\r\n\t -]+/', '-', $filename );
@@ -3146,9 +3168,25 @@ function wp_rel_ugc( $text ) {
  */
 function wp_targeted_link_rel( $text ) {
 	// Don't run (more expensive) regex if no links with targets.
-	if ( stripos( $text, 'target' ) !== false && stripos( $text, '<a ' ) !== false ) {
-		if ( ! is_serialized( $text ) ) {
-			$text = preg_replace_callback( '|<a\s([^>]*target\s*=[^>]*)>|i', 'wp_targeted_link_rel_callback', $text );
+	if ( stripos( $text, 'target' ) === false || stripos( $text, '<a ' ) === false || is_serialized( $text ) ) {
+		return $text;
+	}
+
+	$script_and_style_regex = '/<(script|style).*?<\/\\1>/si';
+
+	preg_match_all( $script_and_style_regex, $text, $matches );
+	$extra_parts = $matches[0];
+	$html_parts  = preg_split( $script_and_style_regex, $text );
+
+	foreach ( $html_parts as &$part ) {
+		$part = preg_replace_callback( '|<a\s([^>]*target\s*=[^>]*)>|i', 'wp_targeted_link_rel_callback', $part );
+	}
+
+	$text = '';
+	for ( $i = 0; $i < count( $html_parts ); $i++ ) {
+		$text .= $html_parts[ $i ];
+		if ( isset( $extra_parts[ $i ] ) ) {
+			$text .= $extra_parts[ $i ];
 		}
 	}
 
@@ -3167,8 +3205,17 @@ function wp_targeted_link_rel( $text ) {
  * @return string HTML A Element with rel noreferrer noopener in addition to any existing values
  */
 function wp_targeted_link_rel_callback( $matches ) {
-	$link_html = $matches[1];
-	$rel_match = array();
+	$link_html          = $matches[1];
+	$original_link_html = $link_html;
+
+	// Consider the html escaped if there are no unescaped quotes
+	$is_escaped = ! preg_match( '/(^|[^\\\\])[\'"]/', $link_html );
+	if ( $is_escaped ) {
+		// Replace only the quotes so that they are parsable by wp_kses_hair, leave the rest as is
+		$link_html = preg_replace( '/\\\\([\'"])/', '$1', $link_html );
+	}
+
+	$atts = wp_kses_hair( $link_html, wp_allowed_protocols() );
 
 	/**
 	 * Filters the rel values that are added to links with `target` attribute.
@@ -3180,35 +3227,21 @@ function wp_targeted_link_rel_callback( $matches ) {
 	 */
 	$rel = apply_filters( 'wp_targeted_link_rel', 'noopener noreferrer', $link_html );
 
-	// Avoid additional regex if the filter removes rel values.
-	if ( ! $rel ) {
-		return "<a $link_html>";
+	// Return early if no rel values to be added or if no actual target attribute
+	if ( ! $rel || ! isset( $atts['target'] ) ) {
+		return "<a $original_link_html>";
 	}
 
-	// Value with delimiters, spaces around are optional.
-	$attr_regex = '|rel\s*=\s*?(\\\\{0,1}["\'])(.*?)\\1|i';
-	preg_match( $attr_regex, $link_html, $rel_match );
-
-	if ( empty( $rel_match[0] ) ) {
-		// No delimiters, try with a single value and spaces, because `rel =  va"lue` is totally fine...
-		$attr_regex = '|rel\s*=(\s*)([^\s]*)|i';
-		preg_match( $attr_regex, $link_html, $rel_match );
+	if ( isset( $atts['rel'] ) ) {
+		$all_parts = preg_split( '/\s/', "{$atts['rel']['value']} $rel", -1, PREG_SPLIT_NO_EMPTY );
+		$rel       = implode( ' ', array_unique( $all_parts ) );
 	}
 
-	if ( ! empty( $rel_match[0] ) ) {
-		$parts     = preg_split( '|\s+|', strtolower( $rel_match[2] ) );
-		$parts     = array_map( 'esc_attr', $parts );
-		$needed    = explode( ' ', $rel );
-		$parts     = array_unique( array_merge( $parts, $needed ) );
-		$delimiter = trim( $rel_match[1] ) ? $rel_match[1] : '"';
-		$rel       = 'rel=' . $delimiter . trim( implode( ' ', $parts ) ) . $delimiter;
-		$link_html = str_replace( $rel_match[0], $rel, $link_html );
-	} elseif ( preg_match( '|target\s*=\s*?\\\\"|', $link_html ) ) {
-		$link_html .= " rel=\\\"$rel\\\"";
-	} elseif ( preg_match( '#(target|href)\s*=\s*?\'#', $link_html ) ) {
-		$link_html .= " rel='$rel'";
-	} else {
-		$link_html .= " rel=\"$rel\"";
+	$atts['rel']['whole'] = 'rel="' . esc_attr( $rel ) . '"';
+	$link_html            = join( ' ', array_column( $atts, 'whole' ) );
+
+	if ( $is_escaped ) {
+		$link_html = preg_replace( '/[\'"]/', '\\\\$0', $link_html );
 	}
 
 	return "<a $link_html>";
@@ -4892,6 +4925,31 @@ function wp_pre_kses_less_than_callback( $matches ) {
 }
 
 /**
+ * Remove non-allowable HTML from parsed block attribute values when filtering
+ * in the post context.
+ *
+ * @since 5.3.1
+ *
+ * @param string         $string            Content to be run through KSES.
+ * @param array[]|string $allowed_html      An array of allowed HTML elements
+ *                                          and attributes, or a context name
+ *                                          such as 'post'.
+ * @param string[]       $allowed_protocols Array of allowed URL protocols.
+ * @return string Filtered text to run through KSES.
+ */
+function wp_pre_kses_block_attributes( $string, $allowed_html, $allowed_protocols ) {
+	/*
+	 * `filter_block_content` is expected to call `wp_kses`. Temporarily remove
+	 * the filter to avoid recursion.
+	 */
+	remove_filter( 'pre_kses', 'wp_pre_kses_block_attributes', 10 );
+	$string = filter_block_content( $string, $allowed_html, $allowed_protocols );
+	add_filter( 'pre_kses', 'wp_pre_kses_block_attributes', 10, 3 );
+
+	return $string;
+}
+
+/**
  * WordPress implementation of PHP sprintf() with filters.
  *
  * @since 2.5.0
@@ -5650,7 +5708,7 @@ function _print_emoji_detection_script() {
 		?>
 		<script<?php echo $type_attr; ?>>
 			window._wpemojiSettings = <?php echo wp_json_encode( $settings ); ?>;
-			!function(e,a,t){var r,n,o,i,p=a.createElement("canvas"),s=p.getContext&&p.getContext("2d");function c(e,t){var a=String.fromCharCode;s.clearRect(0,0,p.width,p.height),s.fillText(a.apply(this,e),0,0);var r=p.toDataURL();return s.clearRect(0,0,p.width,p.height),s.fillText(a.apply(this,t),0,0),r===p.toDataURL()}function l(e){if(!s||!s.fillText)return!1;switch(s.textBaseline="top",s.font="600 32px Arial",e){case"flag":return!c([127987,65039,8205,9895,65039],[127987,65039,8203,9895,65039])&&(!c([55356,56826,55356,56819],[55356,56826,8203,55356,56819])&&!c([55356,57332,56128,56423,56128,56418,56128,56421,56128,56430,56128,56423,56128,56447],[55356,57332,8203,56128,56423,8203,56128,56418,8203,56128,56421,8203,56128,56430,8203,56128,56423,8203,56128,56447]));case"emoji":return!c([55357,56424,55356,57342,8205,55358,56605,8205,55357,56424,55356,57340],[55357,56424,55356,57342,8203,55358,56605,8203,55357,56424,55356,57340])}return!1}function d(e){var t=a.createElement("script");t.src=e,t.defer=t.type="text/javascript",a.getElementsByTagName("head")[0].appendChild(t)}for(i=Array("flag","emoji"),t.supports={everything:!0,everythingExceptFlag:!0},o=0;o<i.length;o++)t.supports[i[o]]=l(i[o]),t.supports.everything=t.supports.everything&&t.supports[i[o]],"flag"!==i[o]&&(t.supports.everythingExceptFlag=t.supports.everythingExceptFlag&&t.supports[i[o]]);t.supports.everythingExceptFlag=t.supports.everythingExceptFlag&&!t.supports.flag,t.DOMReady=!1,t.readyCallback=function(){t.DOMReady=!0},t.supports.everything||(n=function(){t.readyCallback()},a.addEventListener?(a.addEventListener("DOMContentLoaded",n,!1),e.addEventListener("load",n,!1)):(e.attachEvent("onload",n),a.attachEvent("onreadystatechange",function(){"complete"===a.readyState&&t.readyCallback()})),(r=t.source||{}).concatemoji?d(r.concatemoji):r.wpemoji&&r.twemoji&&(d(r.twemoji),d(r.wpemoji)))}(window,document,window._wpemojiSettings);
+			!function(e,a,t){var n,r,o,i=a.createElement("canvas"),p=i.getContext&&i.getContext("2d");function s(e,t){var a=String.fromCharCode;p.clearRect(0,0,i.width,i.height),p.fillText(a.apply(this,e),0,0);e=i.toDataURL();return p.clearRect(0,0,i.width,i.height),p.fillText(a.apply(this,t),0,0),e===i.toDataURL()}function c(e){var t=a.createElement("script");t.src=e,t.defer=t.type="text/javascript",a.getElementsByTagName("head")[0].appendChild(t)}for(o=Array("flag","emoji"),t.supports={everything:!0,everythingExceptFlag:!0},r=0;r<o.length;r++)t.supports[o[r]]=function(e){if(!p||!p.fillText)return!1;switch(p.textBaseline="top",p.font="600 32px Arial",e){case"flag":return s([127987,65039,8205,9895,65039],[127987,65039,8203,9895,65039])?!1:!s([55356,56826,55356,56819],[55356,56826,8203,55356,56819])&&!s([55356,57332,56128,56423,56128,56418,56128,56421,56128,56430,56128,56423,56128,56447],[55356,57332,8203,56128,56423,8203,56128,56418,8203,56128,56421,8203,56128,56430,8203,56128,56423,8203,56128,56447]);case"emoji":return!s([55357,56424,55356,57342,8205,55358,56605,8205,55357,56424,55356,57340],[55357,56424,55356,57342,8203,55358,56605,8203,55357,56424,55356,57340])}return!1}(o[r]),t.supports.everything=t.supports.everything&&t.supports[o[r]],"flag"!==o[r]&&(t.supports.everythingExceptFlag=t.supports.everythingExceptFlag&&t.supports[o[r]]);t.supports.everythingExceptFlag=t.supports.everythingExceptFlag&&!t.supports.flag,t.DOMReady=!1,t.readyCallback=function(){t.DOMReady=!0},t.supports.everything||(n=function(){t.readyCallback()},a.addEventListener?(a.addEventListener("DOMContentLoaded",n,!1),e.addEventListener("load",n,!1)):(e.attachEvent("onload",n),a.attachEvent("onreadystatechange",function(){"complete"===a.readyState&&t.readyCallback()})),(n=t.source||{}).concatemoji?c(n.concatemoji):n.wpemoji&&n.twemoji&&(c(n.twemoji),c(n.wpemoji)))}(window,document,window._wpemojiSettings);
 		</script>
 		<?php
 	}
